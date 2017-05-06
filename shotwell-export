@@ -1,0 +1,113 @@
+#!/bin/bash
+#
+#    Copyright (C) 2017 Simon Naunton
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+function usage() {
+	echo
+	echo "USAGE: shotwell-export startfile endfile destdir [db]"
+	echo
+        echo "Export from shotwell between dates of startfile and endfile inclusive taking into account duplicate filenames."
+        echo "Also converts videos to MP4, dates them, and gzips original."
+        echo
+	echo "If destdir does not exist in will be created"
+	echo
+	echo "By default uses ~/.local/share/shotwell/data/photo.db, but optional parameter db can be used instead."
+	echo
+}
+
+function do_copy {
+        FN="$(basename "$1")"
+        DF="$DESTDIR/$FN"
+        EXT="${FN##*.}"
+        BN="$(basename -s .$EXT "$FN")"
+
+        # If there is a duplicate, rename filename-[0..n].ext
+        let c=0
+        while [ -f "$DF" ]; do
+                N=$(printf "%03d" $c)
+                DF="$DESTDIR/$BN-$N.$EXT"
+                let c=c+1
+        done
+        cp -av "$1" "$DF" >&2
+        echo $DF
+}
+
+which sqlite3 2>&1 >/dev/null
+if [ $? -ne 0 ]; then
+	echo "Cannot find sqlite3" >&2
+	usage
+	exit 1
+fi
+
+DB=$4
+if [ -z "$DB" ]; then
+	DB="$HOME/.local/share/shotwell/data/photo.db"
+fi
+
+if [ ! -f "$DB" ]; then
+	echo "\'$DB\' does not exist" >&2
+	usage
+	exit 1
+fi
+
+FIRST=$(sqlite3 $DB "select exposure_time from phototable where filename='$1'")
+[ -z "$FIRST" ] && FIRST=$(sqlite3 $DB "select exposure_time from videotable where filename='$1'")
+
+if [ -z "$FIRST" ]; then
+	echo "Cannot find first photo or video: '$1'" >&2
+	usage
+	exit 1
+fi
+
+LAST=$(sqlite3 $DB "select exposure_time from phototable where filename='$2'")
+[ -z "$LAST" ] && LAST=$(sqlite3 $DB "select exposure_time from videotable where filename='$2'")
+
+if [ -z "$LAST" ]; then
+	echo "Cannot find last photo or video: '$2'" >&2
+	usage
+	exit 1
+fi
+
+DESTDIR=$3
+if [ ! -d "$DESTDIR" ]; then
+	mkdir -p "$DESTDIR"
+fi
+
+if [ ! -d "$DESTDIR" ]; then
+	echo "'$DESTDIR' does not exist, or could not create '$DESTDIR'" >&2
+	usage
+	exit 1
+fi
+
+sqlite3 $DB "select filename from phototable where exposure_time>=$FIRST and exposure_time<=$LAST;" | while read f;
+do
+	DF=$(do_copy "$f")
+done
+
+sqlite3 $DB "select filename from videotable where exposure_time>=$FIRST and exposure_time<=$LAST;" | while read f;
+do
+	DF=$(do_copy "$f")
+	# Convert to MP4 and then gzip original.
+	# Need < /dev/null to handle inside a loop
+	ffmpeg -i "$DF" -c:a aac -b:a 128k -c:v libx264 -crf 23 "$DF.mp4" < /dev/null
+	gzip --best "$DF"
+	# Set date on mp4
+	# Get epoch
+	D=$(sqlite3 $DB "select exposure_time from videotable where filename='$f'")
+	# Convert to local time	in format suitable for exiftool
+	MCD=$(date -d @$D +"%Y:%m:%d %H:%M:%S")
+	exiftool -MediaCreateDate="$MCD" -overwrite_original "$DF.mp4"
+done
