@@ -17,14 +17,28 @@
 
 function usage() {
 	echo
-	echo "USAGE: shotwell-export startfile endfile destdir [db]"
+	echo "USAGE: shotwell-export firstfile lastfile destdir [db]"
 	echo
-        echo "Export from shotwell between dates of startfile and endfile inclusive taking into account duplicate filenames."
-        echo "Also converts videos to MP4, dates them, and gzips original."
+        echo "Export from shotwell between dates of firstfile and lastfile, inclusive, taking into account duplicate filenames. Also converts avi videos to mp4 and gzips original avi, and sets the MediaCreateDate on all exported videos (Shotwell does not do this) so they are ordered correctly in Google Photos and Amazon Drive (and maybe others?)"
         echo
+	echo "No meta data is set (except for MediaCreateDate on videos - see below). You need to set this in Shotwell."
+	echo
+	echo "To get firstfile and lastfile, in Shotwell select file then View -> Extended Information, copy the Location field"
+	echo
 	echo "If destdir does not exist in will be created"
 	echo
-	echo "By default uses ~/.local/share/shotwell/data/photo.db, but optional parameter db can be used instead."
+	echo "By default ~/.local/share/shotwell/data/photo.db is used, but this can be changed with the optional parameter db."
+	echo
+	echo "Requires sqlite3."
+	echo "If ffmpeg cannot be found then avi file will not be transcoded to mp4."
+	echo "If gzip does not exist avi files will not be gzipped after being transcoded."
+	echo "If exiftool cannot be found videos will not have MediaCreateDate set."
+	echo
+	echo "Variables SQLITE, FFMPEG, GZIP, and EXIFTOOL can be set to point to a specific executable if you do not want to use the version in the PATH."
+	echo
+	echo "EXAMPLE:"
+	echo
+	echo "shotwell-export \"~/OldiPhotoLibrary/Masters/2009/Roll 104/PB230008.JPG\" \"~/OldiPhotoLibrary/Masters/2009/Roll 104/PB260046.JPG\" ~/MyExport"
 	echo
 }
 
@@ -34,7 +48,7 @@ function do_copy {
         EXT="${FN##*.}"
         BN="$(basename -s .$EXT "$FN")"
 
-        # If there is a duplicate, rename filename-[0..n].ext
+        # If there is a duplicate, rename filename-[000...999].ext
         let c=0
         while [ -f "$DF" ]; do
                 N=$(printf "%03d" $c)
@@ -45,9 +59,9 @@ function do_copy {
         echo $DF
 }
 
-which sqlite3 2>&1 >/dev/null
-if [ $? -ne 0 ]; then
-	echo "Cannot find sqlite3" >&2
+[ -z "$SQLITE" ] && SQLITE=$(which sqlite3)
+if [ ! -x "$SQLITE" ]; then
+	echo "ERROR: Cannot find sqlite3: \"$SQLITE\"" >&2
 	usage
 	exit 1
 fi
@@ -58,25 +72,25 @@ if [ -z "$DB" ]; then
 fi
 
 if [ ! -f "$DB" ]; then
-	echo "\'$DB\' does not exist" >&2
+	echo "ERROR: \'$DB\' does not exist" >&2
 	usage
 	exit 1
 fi
 
-FIRST=$(sqlite3 $DB "select exposure_time from phototable where filename='$1'")
-[ -z "$FIRST" ] && FIRST=$(sqlite3 $DB "select exposure_time from videotable where filename='$1'")
+FIRST=$("$SQLITE" "$DB" "select exposure_time from phototable where filename='$1'")
+[ -z "$FIRST" ] && FIRST=$("$SQLITE" "$DB" "select exposure_time from videotable where filename='$1'")
 
 if [ -z "$FIRST" ]; then
-	echo "Cannot find first photo or video: '$1'" >&2
+	echo "ERROR: Cannot find first photo or video: '$1'" >&2
 	usage
 	exit 1
 fi
 
-LAST=$(sqlite3 $DB "select exposure_time from phototable where filename='$2'")
-[ -z "$LAST" ] && LAST=$(sqlite3 $DB "select exposure_time from videotable where filename='$2'")
+LAST=$("$SQLITE" "$DB" "select exposure_time from phototable where filename='$2'")
+[ -z "$LAST" ] && LAST=$("$SQLITE" "$DB" "select exposure_time from videotable where filename='$2'")
 
 if [ -z "$LAST" ]; then
-	echo "Cannot find last photo or video: '$2'" >&2
+	echo "ERROR: Cannot find last photo or video: '$2'" >&2
 	usage
 	exit 1
 fi
@@ -87,27 +101,54 @@ if [ ! -d "$DESTDIR" ]; then
 fi
 
 if [ ! -d "$DESTDIR" ]; then
-	echo "'$DESTDIR' does not exist, or could not create '$DESTDIR'" >&2
+	echo "ERROR: '$DESTDIR' does not exist, or could not create '$DESTDIR'" >&2
 	usage
 	exit 1
 fi
 
-sqlite3 $DB "select filename from phototable where exposure_time>=$FIRST and exposure_time<=$LAST;" | while read f;
+"$SQLITE" "$DB" "select filename from phototable where exposure_time>=$FIRST and exposure_time<=$LAST;" | while read f
 do
 	DF=$(do_copy "$f")
 done
 
-sqlite3 $DB "select filename from videotable where exposure_time>=$FIRST and exposure_time<=$LAST;" | while read f;
+[ -z "$FFMPEG" ] && FFMPEG=$(which ffmpeg)
+if [ ! -x "$FFMPEG" ]; then
+	echo "WARNING: ffmpeg not found. AVI files will not be transcoded to MP4." >&2
+else
+	[ -z "$GZIP" ] && GZIP=$(which gzip)
+	if [ ! -x "$GZIP" ]; then
+		echo "WARNING: gzip not found. Original AVI files will not be zipped." >&2
+	fi
+fi
+
+[ -z "$EXIFTOOL" ] && EXIFTOOL=$(which exiftool) 
+[ ! -x "$EXIFTOOL" ] && echo "WARNING: exiftool not found. MediaCreateDate on video files will not be set." >&2
+
+"$SQLITE" "$DB" "select filename from videotable where exposure_time>=$FIRST and exposure_time<=$LAST;" | while read f
 do
 	DF=$(do_copy "$f")
-	# Convert to MP4 and then gzip original.
-	# Need < /dev/null to handle inside a loop
-	ffmpeg -i "$DF" -c:a aac -b:a 128k -c:v libx264 -crf 23 "$DF.mp4" < /dev/null
-	gzip --best "$DF"
-	# Set date on mp4
-	# Get epoch
-	D=$(sqlite3 $DB "select exposure_time from videotable where filename='$f'")
-	# Convert to local time	in format suitable for exiftool
-	MCD=$(date -d @$D +"%Y:%m:%d %H:%M:%S")
-	exiftool -MediaCreateDate="$MCD" -overwrite_original "$DF.mp4"
+
+	FN="$(basename "$DF")"
+	EXT="${FN##*.}"
+
+	# I could not figure out how to set datetimes on avi files in a google photos and
+	# amazon cloud drive friendly way so, firstly, convert avis to MP4 and gzip original
+	if [ "$EXT" = "AVI" -o "$EXT"  = "avi" ]; then
+		[ -z "$FFMPEG" ] && continue
+
+		"$FFMPEG" -i "$DF" -c:a aac -b:a 128k -c:v libx264 -crf 23 "$DF.mp4" < /dev/null
+
+		if [ ! -z "$GZIP" ]; then
+			"$GZIP" --best "$DF"
+		fi
+
+		DF="$DF.mp4"
+	fi
+
+	# Shotwell does not set date/times on video files, so set date/time here.
+	if [ ! -z "$EXIFTOOL" ]; then
+		D=$("$SQLITE" "$DB" "select exposure_time from videotable where filename='$f'")
+		MCD=$(date -d @$D +"%Y:%m:%d %H:%M:%S")
+		$EXIFTOOL -MediaCreateDate="$MCD" -overwrite_original "$DF"
+	fi
 done
