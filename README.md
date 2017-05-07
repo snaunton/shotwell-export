@@ -20,4 +20,4 @@ Variables SQLITE, FFMPEG, GZIP, and EXIFTOOL can be set to point to a specific e
 
 EXAMPLE:
 
-shotwell-export "~/OldiPhotoLibrary/Masters/2009/Roll 104/PB230008.JPG" "~/OldiPhotoLibrary/Masters/2009/Roll 104/PB260046.JPG" ~/MyExport
+shotwell-export "/home/user/OldiPhotoLibrary/Masters/2009/Roll 104/PB230008.JPG" "/home/user/OldiPhotoLibrary/Masters/2009/Roll 104/PB260046.JPG" /home/user/MyExport
