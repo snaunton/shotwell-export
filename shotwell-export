@@ -134,19 +134,17 @@ do
 	# I could not figure out how to set datetimes on avi files in a google photos and
 	# amazon cloud drive friendly way so, firstly, convert avis to MP4 and gzip original
 	if [ "$EXT" = "AVI" -o "$EXT"  = "avi" ]; then
-		[ -z "$FFMPEG" ] && continue
+		[ ! -x "$FFMPEG" ] && continue
 
 		"$FFMPEG" -i "$DF" -c:a aac -b:a 128k -c:v libx264 -crf 23 "$DF.mp4" < /dev/null
 
-		if [ ! -z "$GZIP" ]; then
-			"$GZIP" --best "$DF"
-		fi
+		[ -x "$GZIP" ] && "$GZIP" --best "$DF"
 
 		DF="$DF.mp4"
 	fi
 
 	# Shotwell does not set date/times on video files, so set date/time here.
-	if [ ! -z "$EXIFTOOL" ]; then
+	if [ -x "$EXIFTOOL" ]; then
 		D=$("$SQLITE" "$DB" "select exposure_time from videotable where filename='$f'")
 		MCD=$(date -d @$D +"%Y:%m:%d %H:%M:%S")
 		$EXIFTOOL -MediaCreateDate="$MCD" -overwrite_original "$DF"
