@@ -19,9 +19,9 @@ function usage() {
 	echo
 	echo "USAGE: shotwell-export firstfile lastfile destdir [db]"
 	echo
-        echo "Export from shotwell between dates of firstfile and lastfile, inclusive, taking into account duplicate filenames. Also converts avi videos to mp4 and gzips original avi, and sets the MediaCreateDate on all exported videos (Shotwell does not do this) so they are ordered correctly in Google Photos and Amazon Drive (and maybe others?)"
+        echo "Export from shotwell between dates of firstfile and lastfile, inclusive, taking into account duplicate filenames. Also converts avi videos to mp4 and gzips original avi, and sets the CreateDate and MediaCreateDate on all exported videos (Shotwell does not do this) so they are ordered correctly in Google Photos and Amazon Drive (and maybe others?)"
         echo
-	echo "No meta data is set (except for MediaCreateDate on videos - see below). You need to set this in Shotwell."
+	echo "No meta data is set (except for CreateDate and MediaCreateDate on videos - see below). You need to set this in Shotwell."
 	echo
 	echo "To get firstfile and lastfile, in Shotwell select file then View -> Extended Information, copy the Location field"
 	echo
@@ -32,7 +32,7 @@ function usage() {
 	echo "Requires sqlite3."
 	echo "If ffmpeg cannot be found then avi file will not be transcoded to mp4."
 	echo "If gzip does not exist avi files will not be gzipped after being transcoded."
-	echo "If exiftool cannot be found videos will not have MediaCreateDate set."
+	echo "If exiftool cannot be found videos will not have CreateDate and MediaCreateDate set. CreateDate is used by Google Photos and MediaCreateDate is used by Amazon Cloud Drive/Prime Photos to order the videos by date (at least in the Aussie versions of the sites)."
 	echo
 	echo "Variables SQLITE, FFMPEG, GZIP, and EXIFTOOL can be set to point to a specific executable if you do not want to use the version in the PATH."
 	echo
@@ -122,7 +122,7 @@ else
 fi
 
 [ -z "$EXIFTOOL" ] && EXIFTOOL=$(which exiftool) 
-[ ! -x "$EXIFTOOL" ] && echo "WARNING: exiftool not found. MediaCreateDate on video files will not be set." >&2
+[ ! -x "$EXIFTOOL" ] && echo "WARNING: exiftool not found. CreateDate and MediaCreateDate on video files will not be set." >&2
 
 "$SQLITE" "$DB" "select filename from videotable where exposure_time>=$FIRST and exposure_time<=$LAST;" | while read f
 do
@@ -146,7 +146,7 @@ do
 	# Shotwell does not set date/times on video files, so set date/time here.
 	if [ -x "$EXIFTOOL" ]; then
 		D=$("$SQLITE" "$DB" "select exposure_time from videotable where filename='$f'")
-		MCD=$(date -d @$D +"%Y:%m:%d %H:%M:%S")
-		$EXIFTOOL -MediaCreateDate="$MCD" -overwrite_original "$DF"
+		CD=$(date -d @$D +"%Y:%m:%d %H:%M:%S")
+		$EXIFTOOL -CreateDate="$CD" -MediaCreateDate="$CD" -overwrite_original "$DF"
 	fi
 done
